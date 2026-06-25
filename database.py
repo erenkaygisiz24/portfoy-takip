@@ -35,6 +35,7 @@ def init_db():
             islem_tarihi TEXT
         )
         """)
+
         conn.execute("""
         CREATE TABLE IF NOT EXISTS market_cache(
             symbol TEXT,
@@ -44,6 +45,18 @@ def init_db():
             source TEXT,
             fetched_at TEXT,
             PRIMARY KEY(symbol, asset_type)
+        )
+        """)
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS price_history_cache(
+            symbol TEXT,
+            asset_type TEXT,
+            price REAL,
+            price_date TEXT,
+            source TEXT,
+            fetched_at TEXT,
+            PRIMARY KEY(symbol, asset_type, price_date)
         )
         """)
 
@@ -80,20 +93,47 @@ def delete_asset(asset_id):
 
 
 def cache_price(symbol, asset_type, price, price_date, source):
+    symbol = normalize_symbol(symbol)
+    asset_type = str(asset_type)
+    price_date = str(price_date or "-")
     with db() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO market_cache
             VALUES (?,?,?,?,?,datetime('now'))
             """,
-            (normalize_symbol(symbol), asset_type, float(price), price_date, source),
+            (symbol, asset_type, float(price), price_date, source),
         )
+        if price_date != "-":
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO price_history_cache
+                VALUES (?,?,?,?,?,datetime('now'))
+                """,
+                (symbol, asset_type, float(price), price_date, source),
+            )
 
 
 def get_cached_price(symbol, asset_type):
     with db() as conn:
         row = conn.execute(
-            "SELECT * FROM market_cache WHERE symbol=? AND asset_type=?",
+            """
+            SELECT *
+            FROM market_cache
+            WHERE symbol=? AND asset_type=?
+            """,
             (normalize_symbol(symbol), asset_type),
         ).fetchone()
     return dict(row) if row else None
+
+
+def get_cache_table():
+    with db() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT symbol, asset_type, price, price_date, source, fetched_at
+            FROM market_cache
+            ORDER BY fetched_at DESC
+            """,
+            conn,
+        )

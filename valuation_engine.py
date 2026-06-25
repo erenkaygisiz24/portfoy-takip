@@ -41,3 +41,15 @@ def value_portfolio(portfolio):
     df["hedef_sapma"] = df["portfoy_orani"] - df["ideal_oran"]
 
     return df, prices
+
+
+def rebalance_table(valued):
+    if valued.empty:
+        return pd.DataFrame()
+
+    total = float(valued["guncel_deger"].sum())
+    df = valued.copy()
+    df["hedef_tutar"] = total * df["ideal_oran"]
+    df["alim_satim_tutari"] = df["hedef_tutar"] - df["guncel_deger"]
+    df["tahmini_adet"] = np.where(df["price"] > 0, df["alim_satim_tutari"] / df["price"], 0)
+    return df

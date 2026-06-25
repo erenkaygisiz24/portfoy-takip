@@ -1,13 +1,15 @@
+import plotly.express as px
 import streamlit as st
 
-from database import init_db, portfolio_df, add_asset, delete_asset
-from valuation_engine import value_portfolio
+from analytics import analytics_from_portfolio
+from database import get_cache_table, init_db, portfolio_df, add_asset, delete_asset
+from valuation_engine import rebalance_table, value_portfolio
 
 st.set_page_config(page_title="Portföy Takip", page_icon="📈", layout="wide")
 init_db()
 
 st.title("📈 Finansal Portföy Takip Sistemi")
-st.caption("v1.1 Provider Engine | TEFAS + BIST + Döviz + Emtia | Time-Tolerance + SQLite Cache")
+st.caption("v1.2 Batch Provider Engine | Time-Tolerance + SQLite Cache + Analytics")
 
 with st.sidebar:
     st.header("Varlık Ekle")
@@ -37,7 +39,7 @@ if raw.empty:
     st.info("Soldaki menüden ilk varlığını ekle.")
     st.stop()
 
-with st.spinner("Provider Engine fiyatları çekiyor..."):
+with st.spinner("Batch Provider Engine fiyatları çekiyor..."):
     valued, prices = value_portfolio(raw)
 
 total_cost = float(valued["maliyet_degeri"].sum())
@@ -51,7 +53,9 @@ c2.metric("Güncel Değer", f"{total_value:,.2f} ₺")
 c3.metric("Kâr/Zarar", f"{pnl:+,.2f} ₺")
 c4.metric("Getiri", f"{pnl_pct:+.2%}")
 
-tab1, tab2, tab3 = st.tabs(["Portföy", "Fiyat Kaynakları", "Sil"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Portföy", "Grafikler", "Rebalance", "Analiz", "Fiyat Kaynakları", "Sil"
+])
 
 with tab1:
     show = valued.rename(columns={
@@ -75,9 +79,58 @@ with tab1:
     )
 
 with tab2:
-    st.dataframe(prices, use_container_width=True)
+    fig = px.pie(valued, names="kod_adi", values="guncel_deger", title="Portföy Dağılımı")
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig2 = px.treemap(valued, path=["tur", "kategori", "kod_adi"], values="guncel_deger", title="Treemap")
+    st.plotly_chart(fig2, use_container_width=True)
 
 with tab3:
+    rb = rebalance_table(valued)
+    st.dataframe(
+        rb[["kod_adi", "guncel_deger", "ideal_oran", "hedef_tutar", "alim_satim_tutari", "tahmini_adet"]]
+        .rename(columns={
+            "kod_adi": "Kod",
+            "guncel_deger": "Mevcut Tutar",
+            "ideal_oran": "Hedef Oran",
+            "hedef_tutar": "Hedef Tutar",
+            "alim_satim_tutari": "Al/Sat Tutarı",
+            "tahmini_adet": "Tahmini Adet",
+        })
+        .style.format({
+            "Mevcut Tutar": "{:,.2f} ₺",
+            "Hedef Oran": "{:.2%}",
+            "Hedef Tutar": "{:,.2f} ₺",
+            "Al/Sat Tutarı": "{:+,.2f} ₺",
+            "Tahmini Adet": "{:+,.4f}",
+        }),
+        use_container_width=True
+    )
+
+with tab4:
+    corr, summary, hist = analytics_from_portfolio(raw)
+    if hist.empty:
+        st.info("Tarihsel veri bulunamadı.")
+    else:
+        st.line_chart(hist)
+    if corr is not None:
+        st.subheader("Korelasyon Matrisi")
+        st.dataframe(corr.style.background_gradient(axis=None), use_container_width=True)
+    if summary is not None:
+        st.subheader("Risk / Getiri Özeti")
+        st.dataframe(summary.style.format({
+            "Yıllık Getiri": "{:+.2%}",
+            "Yıllık Volatilite": "{:.2%}",
+            "Son Fiyat": "{:,.4f}",
+        }), use_container_width=True)
+
+with tab5:
+    st.subheader("Bu değerlemede kullanılan fiyatlar")
+    st.dataframe(prices, use_container_width=True)
+    st.subheader("SQLite son fiyat cache")
+    st.dataframe(get_cache_table(), use_container_width=True)
+
+with tab6:
     labels = {
         f"#{int(r['id'])} | {r['kod_adi']} | {r['tur']} | {r['adet']} adet": int(r["id"])
         for _, r in raw.iterrows()

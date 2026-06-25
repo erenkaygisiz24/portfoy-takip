@@ -13,9 +13,12 @@ HEADERS = {
 YF_ALIASES = {
     "USD": "TRY=X",
     "EUR": "EURTRY=X",
+    "GBP": "GBPTRY=X",
     "ONS": "GC=F",
+    "XAUUSD": "GC=F",
     "SP500": "^GSPC",
     "NASDAQ": "^IXIC",
+    "BIST100": "XU100.IS",
 }
 
 GRAM_ALTIN_ALIASES = {"GRAM", "GRAM ALTIN", "ALTIN", "XAU", "GAU"}
