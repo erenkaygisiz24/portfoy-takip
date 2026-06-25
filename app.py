@@ -1,4 +1,3 @@
-import pandas as pd
 import streamlit as st
 
 from database import init_db, portfolio_df, add_asset, delete_asset
@@ -8,7 +7,7 @@ st.set_page_config(page_title="Portföy Takip", page_icon="📈", layout="wide")
 init_db()
 
 st.title("📈 Finansal Portföy Takip Sistemi")
-st.caption("TEFAS + BIST + Döviz + Emtia | Time-Tolerance + SQLite Cache")
+st.caption("v1.1 Provider Engine | TEFAS + BIST + Döviz + Emtia | Time-Tolerance + SQLite Cache")
 
 with st.sidebar:
     st.header("Varlık Ekle")
@@ -38,7 +37,7 @@ if raw.empty:
     st.info("Soldaki menüden ilk varlığını ekle.")
     st.stop()
 
-with st.spinner("Fiyatlar çekiliyor..."):
+with st.spinner("Provider Engine fiyatları çekiyor..."):
     valued, prices = value_portfolio(raw)
 
 total_cost = float(valued["maliyet_degeri"].sum())
@@ -76,10 +75,7 @@ with tab1:
     )
 
 with tab2:
-    if prices.empty:
-        st.warning("Fiyat kaynağı bulunamadı; maliyet fallback kullanıldı.")
-    else:
-        st.dataframe(prices, use_container_width=True)
+    st.dataframe(prices, use_container_width=True)
 
 with tab3:
     labels = {

@@ -1,4 +1,6 @@
-__pycache__/ 
-*.pyc 
-*.db 
-.streamlit/ 
+__pycache__/
+*.pyc
+*.db
+.streamlit/
+logs/
+.env
