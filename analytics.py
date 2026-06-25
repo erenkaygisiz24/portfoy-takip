@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from market_engine import get_history_matrix
+from optimizer import optimize_portfolio
 
 
 def analytics_from_portfolio(portfolio):
@@ -21,5 +22,6 @@ def analytics_from_portfolio(portfolio):
         "Yıllık Volatilite": returns.std() * np.sqrt(252),
         "Son Fiyat": prices.iloc[-1],
     })
-
+    optimal = optimize_portfolio(returns)
+    summary.attrs["optimal"] = optimal
     return corr, summary, prices

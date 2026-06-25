@@ -109,20 +109,40 @@ with tab3:
 
 with tab4:
     corr, summary, hist = analytics_from_portfolio(raw)
+
     if hist.empty:
         st.info("Tarihsel veri bulunamadı.")
     else:
         st.line_chart(hist)
+
     if corr is not None:
         st.subheader("Korelasyon Matrisi")
-        st.dataframe(corr.style.background_gradient(axis=None), use_container_width=True)
+        st.dataframe(
+            corr.style.background_gradient(axis=None),
+            use_container_width=True
+        )
+
     if summary is not None:
         st.subheader("Risk / Getiri Özeti")
-        st.dataframe(summary.style.format({
-            "Yıllık Getiri": "{:+.2%}",
-            "Yıllık Volatilite": "{:.2%}",
-            "Son Fiyat": "{:,.4f}",
-        }), use_container_width=True)
+        st.dataframe(
+            summary.style.format({
+                "Yıllık Getiri": "{:+.2%}",
+                "Yıllık Volatilite": "{:.2%}",
+                "Son Fiyat": "{:,.4f}",
+            }),
+            use_container_width=True
+        )
+
+        optimal = summary.attrs.get("optimal")
+
+        if optimal is not None:
+            st.subheader("Sharpe Optimizasyonu")
+            st.dataframe(
+                optimal.style.format({
+                    "Optimal Ağırlık": "{:.2%}"
+                }),
+                use_container_width=True
+            )
 
 with tab5:
     st.subheader("Bu değerlemede kullanılan fiyatlar")
