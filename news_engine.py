@@ -5,32 +5,107 @@ import requests
 from bs4 import BeautifulSoup
 
 from database import normalize_symbol
+from openai import OpenAI
 
 
-def simple_ai_summary(items, symbol):
+def analyze_news_ai(items, symbol):
     if not items:
-        return f"{symbol} için son dönemde anlamlı haber/KAP bulunamadı."
+        return {
+            "symbol": symbol,
+            "summary": f"{symbol} için haber bulunamadı.",
+            "sentiment": "Nötr",
+            "importance": "⭐",
+            "impact": "Veri yok",
+        }
 
-    titles = " ".join([str(x.get("title", "")) for x in items[:8]]).lower()
+    text = " ".join([str(x.get("title", "")) for x in items]).lower()
 
-    risk_words = ["dava", "ceza", "zarar", "iptal", "uyarı", "denetim", "düşüş"]
-    positive_words = ["kar", "kâr", "büyüme", "anlaşma", "yatırım", "artış", "temettü"]
+    negative = ["zarar", "ceza", "dava", "iptal", "düşüş", "risk", "soruşturma", "uyarı"]
+    positive = ["kar", "kâr", "artış", "büyüme", "anlaşma", "yatırım", "getiri", "yükseliş"]
+    important = ["kap", "portföy", "strateji", "yönetim", "birleşme", "tasfiye", "temettü"]
 
-    risk = sum(w in titles for w in risk_words)
-    positive = sum(w in titles for w in positive_words)
+    neg_score = sum(w in text for w in negative)
+    pos_score = sum(w in text for w in positive)
+    imp_score = sum(w in text for w in important)
 
-    if risk > positive:
-        tone = "negatif/risk odaklı"
-    elif positive > risk:
-        tone = "pozitif"
+    if pos_score > neg_score:
+        sentiment = "Pozitif 🟢"
+    elif neg_score > pos_score:
+        sentiment = "Negatif 🔴"
     else:
-        tone = "nötr"
+        sentiment = "Nötr 🟡"
 
-    top = items[0].get("title", "")
-    return (
-        f"{symbol} için bulunan haber/KAP akışı genel olarak {tone} görünüyor. "
-        f"Öne çıkan başlık: {top}"
+    importance = "⭐" * max(1, min(5, imp_score + 1))
+
+    top_title = items[0].get("title", "")
+
+    summary = (
+        f"{symbol} için {len(items)} haber bulundu. "
+        f"Genel duygu: {sentiment}. "
+        f"Öne çıkan başlık: {top_title}"
     )
+
+    if neg_score > 0:
+        impact = "Risk sinyali olabilir, detaylı inceleme önerilir."
+    elif pos_score > 0:
+        impact = "Olumlu haber akışı var, portföy etkisi izlenebilir."
+    else:
+        impact = "Belirgin olumlu/olumsuz sinyal yok."
+
+    return {
+        "symbol": symbol,
+        "summary": summary,
+        "sentiment": sentiment,
+        "importance": importance,
+        "impact": impact,
+    }
+def analyze_news_with_llm(items, symbol):
+    try:
+        client = OpenAI()
+
+        text = "\n".join(
+            [f"- {x.get('title', '')}" for x in items[:10]]
+        )
+
+        prompt = f"""
+Aşağıdaki haber başlıklarını {symbol} fonu açısından analiz et.
+
+Başlıklar:
+{text}
+
+Çıktı formatı:
+Özet:
+Duygu:
+Önem:
+Portföy Etkisi:
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Sen finansal haberleri kısa, net ve yatırımcı odaklı özetleyen bir asistansın."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+
+        content = response.choices[0].message.content
+
+        return {
+            "symbol": symbol,
+            "summary": content,
+            "sentiment": "AI Analizi",
+            "importance": "AI",
+            "impact": "AI tarafından yorumlandı.",
+        }
+
+    except Exception:
+        fallback = analyze_news_ai(items, symbol)
+
+        if isinstance(fallback.get("summary"), dict):
+            fallback = fallback["summary"]
+
+        return fallback
 
 
 def google_news_search(symbol, fund_name=None, limit=10):
@@ -161,12 +236,12 @@ def get_symbol_news(symbol, fund_name=None):
     df = pd.DataFrame(rows)
 
     if df.empty:
-        return df, simple_ai_summary([], symbol)
+        return df, analyze_news_ai([], symbol)
 
     df = df.drop_duplicates(subset=["title"]).reset_index(drop=True)
-    summary = simple_ai_summary(df.to_dict("records"), symbol)
+    analysis = analyze_news_with_llm(df.to_dict("records"), symbol)
 
-    return df, summary
+    return df, analysis
 
 
 def get_portfolio_news(portfolio_df):
@@ -178,15 +253,12 @@ def get_portfolio_news(portfolio_df):
 
     for _, row in portfolio_df.iterrows():
         symbol = normalize_symbol(row["kod_adi"])
-        df, summary = get_symbol_news(symbol)
+        df, analysis = get_symbol_news(symbol)
 
         if not df.empty:
             all_rows.append(df)
 
-        summaries.append({
-            "symbol": symbol,
-            "summary": summary,
-        })
+        summaries.append(analysis)
 
     if all_rows:
         news_df = pd.concat(all_rows, ignore_index=True)

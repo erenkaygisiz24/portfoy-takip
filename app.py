@@ -6,13 +6,34 @@ from database import get_cache_table, init_db, portfolio_df, add_asset, delete_a
 from valuation_engine import rebalance_table, value_portfolio
 from pdf_report import create_portfolio_pdf
 from news_engine import get_portfolio_news
+from datetime import date
 
 st.set_page_config(page_title="Portföy Takip", page_icon="📈", layout="wide")
 init_db()
 
 st.title("📈 Finansal Portföy Takip Sistemi")
 st.caption("v1.2 Batch Provider Engine | Time-Tolerance + SQLite Cache + Analytics")
+alerts = []
 
+if not raw.empty:
+
+    if (valued["hedef_sapma"].abs() > 20).any():
+        alerts.append("⚠️ Portföy dağılımı hedef orandan sapmış.")
+
+    if (valued["kar_zarar"] > 0).any():
+        alerts.append("🟢 Karlı pozisyonlar mevcut.")
+
+    if (valued["kar_zarar"] < 0).any():
+        alerts.append("🔴 Zararda pozisyonlar mevcut.")
+
+    if (prices["price_date"] != str(date.today())).any():
+        alerts.append("🟡 Bazı fiyatlar son kapanış fiyatıdır.")
+
+if alerts:
+    st.warning("## Portföy Uyarıları")
+
+    for a in alerts:
+        st.write(a)
 with st.sidebar:
     st.header("Varlık Ekle")
     tur = st.selectbox("Tür", ["Fon", "Hisse Senedi", "Döviz", "Emtia"])
@@ -159,10 +180,25 @@ with tab6:
 
     st.markdown("### AI Özetleri")
 
-    for item in summaries:
-        st.info(f"**{item['symbol']}** — {item['summary']}")
+for item in summaries:
+    summary_text = item.get("summary", "-")
 
-    st.markdown("### Haber / KAP Listesi")
+    if isinstance(summary_text, dict):
+        summary_text = summary_text.get("summary", "-")
+
+    st.info(
+        f"""
+**{item.get('symbol', '-')}**
+
+**Özet:** {summary_text}
+
+**Duygu:** {item.get('sentiment', 'Nötr 🟡')}
+
+**Önem:** {item.get('importance', '⭐')}
+
+**Portföy Etkisi:** {item.get('impact', 'Belirgin etki yok.')}
+"""
+    )
 
     if news_df.empty:
         st.warning("Haber bulunamadı.")

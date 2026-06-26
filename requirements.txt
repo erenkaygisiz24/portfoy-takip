@@ -8,3 +8,4 @@ scipy
 pytest
 beautifulsoup4
 feedparser
+openai
