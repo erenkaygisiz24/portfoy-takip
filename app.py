@@ -4,6 +4,7 @@ import streamlit as st
 from analytics import analytics_from_portfolio
 from database import get_cache_table, init_db, portfolio_df, add_asset, delete_asset
 from valuation_engine import rebalance_table, value_portfolio
+from pdf_report import create_portfolio_pdf
 
 st.set_page_config(page_title="Portföy Takip", page_icon="📈", layout="wide")
 init_db()
@@ -53,8 +54,8 @@ c2.metric("Güncel Değer", f"{total_value:,.2f} ₺")
 c3.metric("Kâr/Zarar", f"{pnl:+,.2f} ₺")
 c4.metric("Getiri", f"{pnl_pct:+.2%}")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "Portföy", "Grafikler", "Rebalance", "Analiz", "Fiyat Kaynakları", "Sil"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "Portföy", "Grafikler", "Rebalance", "Analiz", "Fiyat Kaynakları", "PDF Rapor", "Sil"
 ])
 
 with tab1:
@@ -151,6 +152,19 @@ with tab5:
     st.dataframe(get_cache_table(), use_container_width=True)
 
 with tab6:
+    st.subheader("PDF Rapor Oluştur")
+
+    pdf_file = create_portfolio_pdf(valued, prices)
+
+    st.download_button(
+        label="PDF Raporu İndir",
+        data=pdf_file,
+        file_name="portfoy_raporu.pdf",
+        mime="application/pdf",
+        type="primary"
+    )
+
+with tab7:
     labels = {
         f"#{int(r['id'])} | {r['kod_adi']} | {r['tur']} | {r['adet']} adet": int(r["id"])
         for _, r in raw.iterrows()
