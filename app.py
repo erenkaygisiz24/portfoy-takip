@@ -154,7 +154,8 @@ with tab5:
 with tab6:
     st.subheader("Haber & KAP Takibi")
 
-    news_df, summaries = get_portfolio_news(raw)
+    with st.spinner("Haberler getiriliyor..."):
+        news_df, summaries = get_portfolio_news(raw)
 
     st.markdown("### AI Özetleri")
 
@@ -172,7 +173,7 @@ with tab6:
         for _, row in news_df.head(10).iterrows():
             if row["link"]:
                 st.markdown(f"- [{row['title']}]({row['link']})")
-                
+
 with tab7:
     st.subheader("PDF Rapor Oluştur")
 

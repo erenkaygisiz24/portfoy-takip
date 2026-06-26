@@ -154,9 +154,9 @@ def get_symbol_news(symbol, fund_name=None):
     symbol = normalize_symbol(symbol)
 
     rows = []
-    rows.extend(kap_api_search(symbol))
-    rows.extend(mynet_kap_search(symbol))
-    rows.extend(google_news_search(symbol, fund_name=fund_name))
+
+    # Şimdilik hızlı ve çalışan kaynak
+    rows.extend(google_news_search(symbol, fund_name=fund_name, limit=10))
 
     df = pd.DataFrame(rows)
 
