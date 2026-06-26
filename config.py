@@ -1,6 +1,6 @@
 DB_PATH = "pro_portfoy.db"
 
-TEFAS_URL = "https://www.tefas.gov.tr/api/FonGetir/GetirFonBilgileri"
+TEFAS_URL = "https://www.tefas.gov.tr/api/funds/fonGnlBlgSiraliGetir"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -22,3 +22,5 @@ YF_ALIASES = {
 }
 
 GRAM_ALTIN_ALIASES = {"GRAM", "GRAM ALTIN", "ALTIN", "XAU", "GAU"}
+FONOLOJI_BASE_URL = "https://fonoloji.com/api"
+FONOLOJI_API_KEY = ""

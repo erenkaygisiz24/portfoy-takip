@@ -8,7 +8,7 @@ import yfinance as yf
 
 from config import HEADERS, TEFAS_URL, YF_ALIASES, GRAM_ALTIN_ALIASES
 from database import normalize_symbol, cache_price, get_cached_price
-
+from pytefas import Crawler
 
 @dataclass
 class PriceResult:
@@ -182,80 +182,143 @@ class YahooProvider:
         except Exception as exc:
             return PriceResult(symbol, asset_type, None, None, self.name, f"error: {exc}")
 
+class FonolojiProvider:
+    name = "Fonoloji TEFAS fallback"
 
-class TefasProvider:
-    name = "TEFAS official endpoint"
-
-    def _fetch_date(self, date_obj):
-        date_text = date_obj.strftime("%d.%m.%Y")
-
-        def request_once():
-            response = requests.post(
-                TEFAS_URL,
-                headers=HEADERS,
-                data={"fontip": "YAT", "bastarih": date_text, "bittarih": date_text},
-                timeout=12,
-            )
-            response.raise_for_status()
-            return response
+    def get_price(self, symbol, asset_type="Fon"):
+        symbol = normalize_symbol(symbol)
 
         try:
-            response = retry_call(request_once, tries=2, wait=0.4)
-            df = pd.DataFrame(response.json())
+            url = f"https://fonoloji.com/api/funds/{symbol}"
+            response = requests.get(url, timeout=12)
 
-            if df.empty or "FONKODU" not in df.columns or "FIYAT" not in df.columns:
-                return pd.DataFrame()
+            if response.status_code != 200:
+                return PriceResult(symbol, "Fon", None, None, self.name, f"http_{response.status_code}")
 
-            df["symbol"] = df["FONKODU"].map(normalize_symbol)
-            df["price"] = df["FIYAT"].map(parse_float)
-            df["price_date"] = date_obj.isoformat()
+            data = response.json()
 
-            return df.dropna(subset=["symbol", "price"])[["symbol", "price", "price_date"]]
-        except Exception:
-            return pd.DataFrame()
+            price = (
+                data.get("price")
+                or data.get("last_price")
+                or data.get("nav")
+                or data.get("current_price")
+            )
+
+            date = (
+                data.get("date")
+                or data.get("price_date")
+                or data.get("last_date")
+                or "-"
+            )
+
+            price = parse_float(price)
+
+            if price is None:
+                return PriceResult(symbol, "Fon", None, None, self.name, "no_price")
+
+            cache_price(symbol, "Fon", price, date, self.name)
+
+            return PriceResult(
+                symbol=symbol,
+                asset_type="Fon",
+                price=price,
+                price_date=date,
+                source=self.name,
+                status="live_or_last_close",
+            )
+
+        except Exception as exc:
+            return PriceResult(symbol, "Fon", None, None, self.name, f"error: {exc}")
+class TefasProvider:
+    name = "pytefas official API"
+
+    def __init__(self):
+        self.client = Crawler()
 
     def get_many(self, symbols, lookback_days=15):
         symbols = tuple(sorted({normalize_symbol(s) for s in symbols if normalize_symbol(s)}))
         rows = []
-        found = set()
+
+        if not symbols:
+            return pd.DataFrame()
+
         today = dt.date.today()
 
-        for i in range(int(lookback_days)):
-            day = today - dt.timedelta(days=i)
-            df = self._fetch_date(day)
-            if df.empty:
-                continue
+        for kind in ["YAT", "EMK", "BYF"]:
+            for i in range(int(lookback_days)):
+                day = today - dt.timedelta(days=i)
+                date_text = day.isoformat()
 
-            df = df[df["symbol"].isin(symbols)]
-            if df.empty:
-                continue
-
-            for _, row in df.iterrows():
-                sym = row["symbol"]
-                if sym in found:
+                try:
+                    df = self.client.fetch(
+                        date_text,
+                        columns="info",
+                        kind=kind
+                    )
+                except Exception:
                     continue
 
-                price = float(row["price"])
-                price_date = row["price_date"]
-                cache_price(sym, "Fon", price, price_date, self.name)
-                rows.append(
-                    PriceResult(sym, "Fon", price, price_date, self.name, "live_or_last_close").__dict__
-                )
-                found.add(sym)
+                if df is None or df.empty:
+                    continue
 
-            if len(found) == len(symbols):
-                break
+                if "fund_code" not in df.columns or "price" not in df.columns:
+                    continue
+
+                df["symbol"] = df["fund_code"].map(normalize_symbol)
+                df = df[df["symbol"].isin(symbols)]
+
+                if df.empty:
+                    continue
+
+                for _, row in df.iterrows():
+                    sym = row["symbol"]
+                    price = parse_float(row["price"])
+
+                    if price is None:
+                        continue
+
+                    cache_price(sym, "Fon", price, date_text, self.name)
+
+                    rows.append(
+                        PriceResult(
+                            sym,
+                            "Fon",
+                            price,
+                            date_text,
+                            self.name,
+                            f"live_or_last_close_{kind}",
+                        ).__dict__
+                    )
+
+                found = {r["symbol"] for r in rows}
+                if len(found) == len(symbols):
+                    return pd.DataFrame(rows)
 
         return pd.DataFrame(rows)
 
     def get_price(self, symbol, asset_type="Fon", lookback_days=15):
         df = self.get_many((symbol,), lookback_days=lookback_days)
+
         if df.empty:
-            return PriceResult(normalize_symbol(symbol), "Fon", None, None, self.name, "not_found")
+            return PriceResult(
+                normalize_symbol(symbol),
+                "Fon",
+                None,
+                None,
+                self.name,
+                "not_found",
+            )
+
         row = df.iloc[0]
-        return PriceResult(row["symbol"], "Fon", float(row["price"]), row["price_date"], row["source"], row["status"])
 
-
+        return PriceResult(
+            row["symbol"],
+            "Fon",
+            float(row["price"]),
+            row["price_date"],
+            row["source"],
+            row["status"],
+        )
 class DerivedProvider:
     name = "Derived market data"
 
@@ -281,6 +344,7 @@ class DerivedProvider:
 class ProviderManager:
     def __init__(self):
         self.tefas = TefasProvider()
+        self.fonoloji = FonolojiProvider()
         self.yahoo = YahooProvider()
         self.cache = CacheProvider()
         self.derived = DerivedProvider()
@@ -291,6 +355,9 @@ class ProviderManager:
 
         if asset_type == "Fon":
             result = self.tefas.get_price(symbol, "Fon")
+            if result.price is not None:
+                return result
+            result = self.fonoloji.get_price(symbol, "Fon")
             if result.price is not None:
                 return result
 
