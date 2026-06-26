@@ -5,6 +5,7 @@ from analytics import analytics_from_portfolio
 from database import get_cache_table, init_db, portfolio_df, add_asset, delete_asset
 from valuation_engine import rebalance_table, value_portfolio
 from pdf_report import create_portfolio_pdf
+from news_engine import get_portfolio_news
 
 st.set_page_config(page_title="Portföy Takip", page_icon="📈", layout="wide")
 init_db()
@@ -54,8 +55,8 @@ c2.metric("Güncel Değer", f"{total_value:,.2f} ₺")
 c3.metric("Kâr/Zarar", f"{pnl:+,.2f} ₺")
 c4.metric("Getiri", f"{pnl_pct:+.2%}")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "Portföy", "Grafikler", "Rebalance", "Analiz", "Fiyat Kaynakları", "PDF Rapor", "Sil"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "Portföy", "Grafikler", "Rebalance", "Analiz", "Fiyat Kaynakları", "Haber & KAP", "PDF Rapor", "Sil"
 ])
 
 with tab1:
@@ -150,8 +151,29 @@ with tab5:
     st.dataframe(prices, use_container_width=True)
     st.subheader("SQLite son fiyat cache")
     st.dataframe(get_cache_table(), use_container_width=True)
-
 with tab6:
+    st.subheader("Haber & KAP Takibi")
+
+    news_df, summaries = get_portfolio_news(raw)
+
+    st.markdown("### AI Özetleri")
+
+    for item in summaries:
+        st.info(f"**{item['symbol']}** — {item['summary']}")
+
+    st.markdown("### Haber / KAP Listesi")
+
+    if news_df.empty:
+        st.warning("Haber bulunamadı.")
+
+    else:
+        st.dataframe(news_df, use_container_width=True)
+
+        for _, row in news_df.head(10).iterrows():
+            if row["link"]:
+                st.markdown(f"- [{row['title']}]({row['link']})")
+                
+with tab7:
     st.subheader("PDF Rapor Oluştur")
 
     pdf_file = create_portfolio_pdf(valued, prices)
@@ -164,7 +186,7 @@ with tab6:
         type="primary"
     )
 
-with tab7:
+with tab8:
     labels = {
         f"#{int(r['id'])} | {r['kod_adi']} | {r['tur']} | {r['adet']} adet": int(r["id"])
         for _, r in raw.iterrows()

@@ -6,3 +6,5 @@ yfinance
 plotly
 scipy
 pytest
+beautifulsoup4
+feedparser
