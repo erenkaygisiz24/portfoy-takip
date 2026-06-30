@@ -8,6 +8,7 @@ from pdf_report import create_portfolio_pdf
 from news_engine import get_portfolio_news
 from datetime import date
 import pandas as pd
+from technical_analysis import analyze_portfolio_technical
 from portfolio_advisor import calculate_risk_score, generate_alerts, ai_portfolio_advisor
 st.set_page_config(page_title="Portföy Takip", page_icon="📈", layout="wide")
 init_db()
@@ -57,7 +58,7 @@ c2.metric("Güncel Değer", f"{total_value:,.2f} ₺")
 c3.metric("Kâr/Zarar", f"{pnl:+,.2f} ₺")
 c4.metric("Getiri", f"{pnl_pct:+.2%}")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "Portföy",
     "Grafikler",
     "Rebalance",
@@ -67,7 +68,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "PDF",
     "Sil",
     "Bildirimler",
-    "AI Danışman"
+    "AI Danışman",
+    "Teknik Analiz"
 ])
 
 with tab1:
@@ -81,6 +83,7 @@ with tab1:
     })
     cols = ["id", "Tür", "Kategori", "Kod", "Adet", "Maliyet", "Güncel Fiyat", "Fiyat Tarihi", "Kaynak",
             "Durum", "Maliyet Değeri", "Güncel Değer", "Kâr/Zarar", "Kâr/Zarar %", "Portföy Oranı", "İdeal Oran", "Hedef Sapma"]
+    
     st.dataframe(
         show[[c for c in cols if c in show.columns]].style.format({
             "Adet": "{:,.4f}", "Maliyet": "{:,.4f} ₺", "Güncel Fiyat": "{:,.4f} ₺",
@@ -116,6 +119,10 @@ with tab3:
             "Hedef Tutar": "{:,.2f} ₺",
             "Al/Sat Tutarı": "{:+,.2f} ₺",
             "Tahmini Adet": "{:+,.4f}",
+            "Üst Bant": "{:.4f}",
+            "Alt Bant": "{:.4f}",
+            "EMA20": "{:,.4f}",
+            "EMA50": "{:,.4f}",
         }),
         use_container_width=True
     )
@@ -288,3 +295,23 @@ with tab10:
     st.markdown("### 🧠 AI Yorumu")
     comment = ai_portfolio_advisor(valued)
     st.info(comment)
+with tab11:
+    st.subheader("📈 Teknik Analiz")
+
+    with st.spinner("Teknik analiz hesaplanıyor..."):
+        tech = analyze_portfolio_technical(raw, days=180)
+
+    if tech.empty:
+        st.warning("Teknik analiz için yeterli veri yok.")
+    else:
+        st.dataframe(
+            tech.style.format({
+                "Son Fiyat": "{:,.4f}",
+                "RSI": "{:.2f}",
+                "MACD": "{:.4f}",
+                "MACD Sinyal": "{:.4f}",
+                "SMA20": "{:,.4f}",
+                "SMA50": "{:,.4f}",
+            }),
+            width="stretch"
+        )
