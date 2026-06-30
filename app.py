@@ -13,27 +13,7 @@ init_db()
 
 st.title("📈 Finansal Portföy Takip Sistemi")
 st.caption("v1.2 Batch Provider Engine | Time-Tolerance + SQLite Cache + Analytics")
-alerts = []
 
-if not raw.empty:
-
-    if (valued["hedef_sapma"].abs() > 20).any():
-        alerts.append("⚠️ Portföy dağılımı hedef orandan sapmış.")
-
-    if (valued["kar_zarar"] > 0).any():
-        alerts.append("🟢 Karlı pozisyonlar mevcut.")
-
-    if (valued["kar_zarar"] < 0).any():
-        alerts.append("🔴 Zararda pozisyonlar mevcut.")
-
-    if (prices["price_date"] != str(date.today())).any():
-        alerts.append("🟡 Bazı fiyatlar son kapanış fiyatıdır.")
-
-if alerts:
-    st.warning("## Portföy Uyarıları")
-
-    for a in alerts:
-        st.write(a)
 with st.sidebar:
     st.header("Varlık Ekle")
     tur = st.selectbox("Tür", ["Fon", "Hisse Senedi", "Döviz", "Emtia"])
@@ -76,8 +56,16 @@ c2.metric("Güncel Değer", f"{total_value:,.2f} ₺")
 c3.metric("Kâr/Zarar", f"{pnl:+,.2f} ₺")
 c4.metric("Getiri", f"{pnl_pct:+.2%}")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "Portföy", "Grafikler", "Rebalance", "Analiz", "Fiyat Kaynakları", "Haber & KAP", "PDF Rapor", "Sil"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    "Portföy",
+    "Grafikler",
+    "Rebalance",
+    "Analiz",
+    "Fiyat Kaynakları",
+    "Haber & KAP",
+    "PDF",
+    "Sil",
+    "Bildirimler"
 ])
 
 with tab1:
@@ -180,15 +168,15 @@ with tab6:
 
     st.markdown("### AI Özetleri")
 
-for item in summaries:
-    summary_text = item.get("summary", "-")
+    for item in summaries:
+        summary_text = item.get("summary", "-")
 
-    if isinstance(summary_text, dict):
-        summary_text = summary_text.get("summary", "-")
+        if isinstance(summary_text, dict):
+            summary_text = summary_text.get("summary", "-")
 
-    st.info(
-        f"""
-**{item.get('symbol', '-')}**
+        st.info(
+            f"""
+**{item.get('symbol', '-') }**
 
 **Özet:** {summary_text}
 
@@ -198,18 +186,18 @@ for item in summaries:
 
 **Portföy Etkisi:** {item.get('impact', 'Belirgin etki yok.')}
 """
-    )
+        )
+
+    st.markdown("### Haber Listesi")
 
     if news_df.empty:
         st.warning("Haber bulunamadı.")
-
     else:
         st.dataframe(news_df, use_container_width=True)
 
         for _, row in news_df.head(10).iterrows():
             if row["link"]:
                 st.markdown(f"- [{row['title']}]({row['link']})")
-
 with tab7:
     st.subheader("PDF Rapor Oluştur")
 
@@ -232,3 +220,40 @@ with tab8:
     if st.button("Seçili Varlığı Sil"):
         delete_asset(labels[selected])
         st.rerun()
+with tab9:
+    news_df, _ = get_portfolio_news(raw)
+    st.subheader("🔔 Bildirim Merkezi")
+
+    if raw.empty:
+        st.info("Portföy boş.")
+
+    else:
+
+        if (valued["kar_zarar"] > 0).any():
+            st.success("🟢 Karlı pozisyon mevcut.")
+
+        if (valued["kar_zarar"] < 0).any():
+            st.error("🔴 Zararda pozisyon mevcut.")
+
+        high = valued[valued["hedef_sapma"].abs() > 20]
+
+        if not high.empty:
+            st.warning("⚠️ Yeniden dengeleme öneriliyor.")
+
+            st.dataframe(
+                high[[
+                    "kod_adi",
+                    "portfoy_orani",
+                    "ideal_oran",
+                    "hedef_sapma"
+                ]],
+                use_container_width=True
+            )
+
+        today_news = len(news_df)
+
+        if today_news > 0:
+            st.info(f"📰 {today_news} yeni haber bulundu.")
+
+        if today_news == 0:
+            st.success("Bugün yeni haber yok.")
