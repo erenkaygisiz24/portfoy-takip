@@ -123,6 +123,8 @@ with tab3:
             "Alt Bant": "{:.4f}",
             "EMA20": "{:,.4f}",
             "EMA50": "{:,.4f}",
+            "Destek": "{:,.4f}",
+            "Direnç": "{:,.4f}",
         }),
         use_container_width=True
     )

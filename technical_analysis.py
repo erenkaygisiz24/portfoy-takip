@@ -153,7 +153,47 @@ def analyze_asset(symbol, asset_type, days=180):
         signal = "🔴 Zayıf"
 
     print("SIGNAL:", symbol, signal)
+    support = float(price.tail(20).min())
+    resistance = float(price.tail(20).max())
+    support = float(price.tail(20).min())
+    resistance = float(price.tail(20).max())
+    technical_score = 50
+    
+    if macd_status == "Pozitif":
+        technical_score += 15
+    else:
+        technical_score -= 15
 
+    if trend.startswith("Yukarı"):
+        technical_score += 15
+    else:
+        technical_score -= 10
+
+    if rsi_status == "Aşırı Satım":
+        technical_score += 10
+    elif rsi_status == "Aşırı Alım":
+        technical_score -= 10
+
+    if last > ema20:
+        technical_score += 10
+    else:
+        technical_score -= 5
+
+    if bollinger == "🟢 Alt Bant":
+        technical_score += 10
+    elif bollinger == "🔴 Üst Bant":
+        technical_score -= 5
+
+    technical_score = max(0, min(100, technical_score))
+
+    if technical_score >= 75:
+        technical_comment = "🟢 Güçlü Pozitif"
+    elif technical_score >= 55:
+        technical_comment = "🟡 Pozitif / Nötr"
+    elif technical_score >= 35:
+        technical_comment = "🟠 Zayıf / Nötr"
+    else:
+        technical_comment = "🔴 Negatif"
     return {
         "Kod": symbol,
         "Tür": asset_type,
@@ -172,6 +212,10 @@ def analyze_asset(symbol, asset_type, days=180):
         "Bollinger": bollinger,
         "Üst Bant": upper_last,
         "Alt Bant": lower_last,
+        "Destek": support,
+        "Direnç": resistance,
+        "Teknik Skor": technical_score,
+        "Teknik Yorum": technical_comment,
     }
 def analyze_portfolio_technical(portfolio_df, days=180):
     rows = []
