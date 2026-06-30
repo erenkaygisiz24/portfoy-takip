@@ -1,35 +1,61 @@
+import datetime as dt
+import os
+
 import numpy as np
 import pandas as pd
-import yfinance as yf
-from pytefas import Crawler
+import plotly.graph_objects as go
 import streamlit as st
+import yfinance as yf
+from google import genai
+from pytefas import Crawler
 
+from database import normalize_symbol
+from providers import classify_asset_type, yf_symbol
+
+
+# =========================
+# INDICATORS
+# =========================
 
 def rsi(series, period=14):
+    series = pd.to_numeric(series, errors="coerce").dropna()
     delta = series.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
 
 def macd(series):
+    series = pd.to_numeric(series, errors="coerce").dropna()
     ema12 = series.ewm(span=12, adjust=False).mean()
     ema26 = series.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     signal = macd_line.ewm(span=9, adjust=False).mean()
-    return macd_line, signal
+    hist = macd_line - signal
+    return macd_line, signal, hist
 
-@st.cache_data(ttl=3600)
+
+def calculate_bollinger(series, period=20, std=2):
+    series = pd.to_numeric(series, errors="coerce").dropna()
+    middle = series.rolling(period).mean()
+    deviation = series.rolling(period).std()
+    upper = middle + std * deviation
+    lower = middle - std * deviation
+    return upper, middle, lower
+
+
+# =========================
+# HISTORY PROVIDERS
+# =========================
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_fund_history(symbol, days=180):
-    import datetime as dt
-    
-
+    symbol = normalize_symbol(symbol)
     try:
         crawler = Crawler()
-
         end = dt.date.today()
-        start = end - dt.timedelta(days=days + 10)
+        start = end - dt.timedelta(days=int(days) + 20)
 
         df = crawler.fetch(
             start=start.isoformat(),
@@ -40,63 +66,127 @@ def get_fund_history(symbol, days=180):
         if df is None or df.empty:
             return pd.Series(dtype=float)
 
-        df["date"] = pd.to_datetime(df["date"])
-        df["fund_code"] = df["fund_code"].astype(str).str.upper()
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["fund_code"] = df["fund_code"].map(normalize_symbol)
         df["price"] = pd.to_numeric(df["price"], errors="coerce")
 
-        df = df[df["fund_code"] == symbol.upper()]
-        df = df.sort_values("date").tail(days)
-
-        if df.empty:
+        sub = df[df["fund_code"] == symbol].dropna(subset=["date", "price"])
+        if sub.empty:
             return pd.Series(dtype=float)
 
-        return df.set_index("date")["price"]
+        sub = sub.sort_values("date").tail(int(days))
+        out = sub.set_index("date")["price"]
+        out.index = pd.to_datetime(out.index).normalize()
+        out.name = symbol
+        return out
 
     except Exception as e:
-        print("FUND HISTORY ERROR:", e)
+        print("FUND HISTORY ERROR:", repr(e))
         return pd.Series(dtype=float)
-def get_stock_history(symbol, days=180):
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_yahoo_history(symbol, asset_type, days=180):
+    symbol = normalize_symbol(symbol)
+    asset_type = classify_asset_type(asset_type)
     try:
-        ticker = symbol.upper()
-
-        if not ticker.endswith(".IS"):
-            ticker = ticker + ".IS"
-
+        ticker = yf_symbol(symbol, asset_type)
         df = yf.download(
             ticker,
-            period=f"{days}d",
+            period=f"{int(days)}d",
             interval="1d",
             auto_adjust=True,
             progress=False,
             threads=False,
         )
 
-        if df.empty:
+        if df is None or df.empty:
             return pd.Series(dtype=float)
 
         close = df["Close"]
-
         if isinstance(close, pd.DataFrame):
             close = close.iloc[:, 0]
 
-        return close.dropna()
+        close = pd.to_numeric(close, errors="coerce").dropna()
+        close.index = pd.to_datetime(close.index).normalize()
+        close.name = symbol
+        return close
 
     except Exception as e:
-        print("STOCK HISTORY ERROR:", e)
+        print("YAHOO HISTORY ERROR:", repr(e))
         return pd.Series(dtype=float)
 
 
 def get_asset_history(symbol, asset_type, days=180):
+    asset_type = classify_asset_type(asset_type)
     if asset_type == "Fon":
         return get_fund_history(symbol, days)
+    return get_yahoo_history(symbol, asset_type, days)
 
-    if asset_type == "Hisse Senedi":
-        return get_stock_history(symbol, days)
 
-    return pd.Series(dtype=float)
+# =========================
+# ANALYSIS
+# =========================
+
+def _status_from_rsi(value):
+    if pd.isna(value):
+        return "Yetersiz Veri"
+    if value >= 70:
+        return "Aşırı Alım"
+    if value <= 30:
+        return "Aşırı Satım"
+    return "Nötr"
+
+
+def _technical_signal(rsi_status, macd_status, trend, bollinger):
+    if rsi_status == "Aşırı Satım" and macd_status == "Pozitif":
+        return "🟢 Güçlü Al"
+    if rsi_status == "Aşırı Alım":
+        return "🟡 Kâr Realizasyonu"
+    if trend.startswith("Yukarı") and macd_status == "Pozitif":
+        return "🟢 Al"
+    if macd_status == "Negatif" and trend.startswith("Zayıf"):
+        return "🔴 Zayıf"
+    if bollinger == "🟢 Alt Bant":
+        return "🟢 Tepki Adayı"
+    return "⚪ Bekle"
+
+
+def _technical_score(last, ema20, rsi_status, macd_status, trend, bollinger):
+    score = 50
+
+    score += 15 if macd_status == "Pozitif" else -15
+    score += 15 if trend.startswith("Yukarı") else -10
+
+    if rsi_status == "Aşırı Satım":
+        score += 10
+    elif rsi_status == "Aşırı Alım":
+        score -= 10
+
+    score += 10 if last > ema20 else -5
+
+    if bollinger == "🟢 Alt Bant":
+        score += 10
+    elif bollinger == "🔴 Üst Bant":
+        score -= 5
+
+    return int(max(0, min(100, score)))
+
+
+def _score_comment(score):
+    if score >= 75:
+        return "🟢 Güçlü Pozitif"
+    if score >= 55:
+        return "🟡 Pozitif / Nötr"
+    if score >= 35:
+        return "🟠 Zayıf / Nötr"
+    return "🔴 Negatif"
 
 
 def analyze_asset(symbol, asset_type, days=180):
+    symbol = normalize_symbol(symbol)
+    asset_type = classify_asset_type(asset_type)
     price = get_asset_history(symbol, asset_type, days)
 
     if price.empty or len(price) < 20:
@@ -106,94 +196,40 @@ def analyze_asset(symbol, asset_type, days=180):
 
     rsi_series = rsi(price)
     last_rsi = float(rsi_series.dropna().iloc[-1]) if not rsi_series.dropna().empty else np.nan
+    rsi_status = _status_from_rsi(last_rsi)
 
-    macd_line, signal_line = macd(price)
-    upper, middle, lower = calculate_bollinger(price)
-
-    upper_last = float(upper.iloc[-1])
-    middle_last = float(middle.iloc[-1])
-    lower_last = float(lower.iloc[-1])
+    macd_line, signal_line, hist_line = macd(price)
     last_macd = float(macd_line.iloc[-1])
     last_signal = float(signal_line.iloc[-1])
+    macd_status = "Pozitif" if last_macd > last_signal else "Negatif"
 
     sma20 = float(price.rolling(20).mean().iloc[-1])
     sma50 = float(price.rolling(50).mean().iloc[-1]) if len(price) >= 50 else np.nan
     ema20 = float(price.ewm(span=20, adjust=False).mean().iloc[-1])
     ema50 = float(price.ewm(span=50, adjust=False).mean().iloc[-1]) if len(price) >= 50 else np.nan
-    if np.isnan(last_rsi):
-        rsi_status = "Yetersiz Veri"
-    elif last_rsi >= 70:
-        rsi_status = "Aşırı Alım"
-    elif last_rsi <= 30:
-        rsi_status = "Aşırı Satım"
-    else:
-        rsi_status = "Nötr"
 
-    macd_status = "Pozitif" if last_macd > last_signal else "Negatif"
+    upper, middle, lower = calculate_bollinger(price)
+    upper_last = float(upper.iloc[-1])
+    middle_last = float(middle.iloc[-1])
+    lower_last = float(lower.iloc[-1])
 
-    if np.isnan(sma50):
-        trend = "Yukarı" if last > sma20 else "Aşağı"
+    if pd.isna(sma50):
+        trend = "Yukarı" if last > sma20 else "Zayıf / Aşağı"
     else:
         trend = "Yukarı" if last > sma20 > sma50 else "Zayıf / Aşağı"
+
     if last >= upper_last:
         bollinger = "🔴 Üst Bant"
     elif last <= lower_last:
         bollinger = "🟢 Alt Bant"
     else:
         bollinger = "⚪ Orta Bant"
-    signal = "⚪ Bekle"
 
-    if rsi_status == "Aşırı Satım" and macd_status == "Pozitif":
-        signal = "🟢 Güçlü Al"
-    elif rsi_status == "Aşırı Alım":
-        signal = "🟡 Kâr Realizasyonu"
-    elif trend.startswith("Yukarı") and macd_status == "Pozitif":
-        signal = "🟢 Al"
-    elif macd_status == "Negatif":
-        signal = "🔴 Zayıf"
-
-    print("SIGNAL:", symbol, signal)
+    signal = _technical_signal(rsi_status, macd_status, trend, bollinger)
     support = float(price.tail(20).min())
     resistance = float(price.tail(20).max())
-    support = float(price.tail(20).min())
-    resistance = float(price.tail(20).max())
-    technical_score = 50
-    
-    if macd_status == "Pozitif":
-        technical_score += 15
-    else:
-        technical_score -= 15
+    score = _technical_score(last, ema20, rsi_status, macd_status, trend, bollinger)
 
-    if trend.startswith("Yukarı"):
-        technical_score += 15
-    else:
-        technical_score -= 10
-
-    if rsi_status == "Aşırı Satım":
-        technical_score += 10
-    elif rsi_status == "Aşırı Alım":
-        technical_score -= 10
-
-    if last > ema20:
-        technical_score += 10
-    else:
-        technical_score -= 5
-
-    if bollinger == "🟢 Alt Bant":
-        technical_score += 10
-    elif bollinger == "🔴 Üst Bant":
-        technical_score -= 5
-
-    technical_score = max(0, min(100, technical_score))
-
-    if technical_score >= 75:
-        technical_comment = "🟢 Güçlü Pozitif"
-    elif technical_score >= 55:
-        technical_comment = "🟡 Pozitif / Nötr"
-    elif technical_score >= 35:
-        technical_comment = "🟠 Zayıf / Nötr"
-    else:
-        technical_comment = "🔴 Negatif"
     return {
         "Kod": symbol,
         "Tür": asset_type,
@@ -211,27 +247,128 @@ def analyze_asset(symbol, asset_type, days=180):
         "Teknik Sinyal": signal,
         "Bollinger": bollinger,
         "Üst Bant": upper_last,
+        "Orta Bant": middle_last,
         "Alt Bant": lower_last,
         "Destek": support,
         "Direnç": resistance,
-        "Teknik Skor": technical_score,
-        "Teknik Yorum": technical_comment,
+        "Teknik Skor": score,
+        "Teknik Yorum": _score_comment(score),
     }
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _analyze_single_cached(symbol, asset_type, days):
+    return analyze_asset(symbol, asset_type, days)
+
+
 def analyze_portfolio_technical(portfolio_df, days=180):
     rows = []
+    if portfolio_df.empty:
+        return pd.DataFrame()
 
     for _, row in portfolio_df.iterrows():
-        result = analyze_asset(row["kod_adi"], row["tur"], days)
-
+        result = _analyze_single_cached(row["kod_adi"], row["tur"], int(days))
         if result:
             rows.append(result)
 
     return pd.DataFrame(rows)
-def calculate_bollinger(series, period=20, std=2):
-    middle = series.rolling(period).mean()
-    deviation = series.rolling(period).std()
 
-    upper = middle + std * deviation
-    lower = middle - std * deviation
 
-    return upper, middle, lower
+# =========================
+# CHART DATA + FIGURES
+# =========================
+
+def get_technical_chart_data(symbol, asset_type, days=180):
+    price = get_asset_history(symbol, asset_type, days)
+    if price.empty or len(price) < 20:
+        return pd.DataFrame()
+
+    df = pd.DataFrame({"Fiyat": price})
+    df["EMA20"] = price.ewm(span=20, adjust=False).mean()
+    df["EMA50"] = price.ewm(span=50, adjust=False).mean()
+    df["SMA20"] = price.rolling(20).mean()
+
+    upper, middle, lower = calculate_bollinger(price)
+    df["Bollinger Üst"] = upper
+    df["Bollinger Orta"] = middle
+    df["Bollinger Alt"] = lower
+    df["RSI"] = rsi(price)
+    macd_line, signal_line, hist_line = macd(price)
+    df["MACD"] = macd_line
+    df["MACD Sinyal"] = signal_line
+    df["MACD Histogram"] = hist_line
+    return df.dropna(how="all")
+
+
+def build_technical_figures(chart_df, symbol):
+    if chart_df.empty:
+        return None, None, None
+
+    price_fig = go.Figure()
+    for col in ["Fiyat", "EMA20", "EMA50", "Bollinger Üst", "Bollinger Alt"]:
+        if col in chart_df.columns:
+            price_fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df[col], mode="lines", name=col))
+
+    # Support / resistance as last 20-day min/max
+    support = float(chart_df["Fiyat"].tail(20).min())
+    resistance = float(chart_df["Fiyat"].tail(20).max())
+    price_fig.add_hline(y=support, line_dash="dot", annotation_text="Destek")
+    price_fig.add_hline(y=resistance, line_dash="dot", annotation_text="Direnç")
+    price_fig.update_layout(title=f"{symbol} Fiyat + EMA + Bollinger", height=420, margin=dict(l=10, r=10, t=45, b=10))
+
+    rsi_fig = go.Figure()
+    rsi_fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["RSI"], mode="lines", name="RSI"))
+    rsi_fig.add_hline(y=70, line_dash="dash", annotation_text="70")
+    rsi_fig.add_hline(y=30, line_dash="dash", annotation_text="30")
+    rsi_fig.update_layout(title="RSI", height=280, margin=dict(l=10, r=10, t=45, b=10))
+
+    macd_fig = go.Figure()
+    macd_fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["MACD"], mode="lines", name="MACD"))
+    macd_fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["MACD Sinyal"], mode="lines", name="Sinyal"))
+    macd_fig.add_trace(go.Bar(x=chart_df.index, y=chart_df["MACD Histogram"], name="Histogram"))
+    macd_fig.update_layout(title="MACD", height=300, margin=dict(l=10, r=10, t=45, b=10))
+
+    return price_fig, rsi_fig, macd_fig
+
+
+# =========================
+# COMMENTARY
+# =========================
+
+def technical_comment(row):
+    return (
+        f"{row['Kod']} için RSI {row['RSI']:.2f} seviyesinde ve durum {row['RSI Durumu']}. "
+        f"MACD görünümü {row['MACD Durumu']}. Trend {row['Trend']}. "
+        f"Bollinger konumu {row['Bollinger']}. Genel teknik sinyal {row['Teknik Sinyal']}. "
+        f"Teknik skor {row['Teknik Skor']}/100: {row['Teknik Yorum']}."
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def technical_comment_with_gemini(row_dict):
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return technical_comment(row_dict)
+
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = f"""
+Aşağıdaki teknik analiz verisini yatırım tavsiyesi vermeden, kısa ve profesyonel yorumla.
+En fazla 90 kelime yaz.
+
+Veri:
+{row_dict}
+
+Format:
+Teknik Görünüm:
+Riskler:
+İzlenecek Seviye:
+"""
+        response = client.models.generate_content(
+            model="gemini-flash-lite-latest",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        print("TECHNICAL GEMINI ERROR:", repr(e))
+        return technical_comment(row_dict)
