@@ -7,7 +7,8 @@ from valuation_engine import rebalance_table, value_portfolio
 from pdf_report import create_portfolio_pdf
 from news_engine import get_portfolio_news
 from datetime import date
-
+import pandas as pd
+from portfolio_advisor import calculate_risk_score, generate_alerts, ai_portfolio_advisor
 st.set_page_config(page_title="Portföy Takip", page_icon="📈", layout="wide")
 init_db()
 
@@ -56,7 +57,7 @@ c2.metric("Güncel Değer", f"{total_value:,.2f} ₺")
 c3.metric("Kâr/Zarar", f"{pnl:+,.2f} ₺")
 c4.metric("Getiri", f"{pnl_pct:+.2%}")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "Portföy",
     "Grafikler",
     "Rebalance",
@@ -65,7 +66,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Haber & KAP",
     "PDF",
     "Sil",
-    "Bildirimler"
+    "Bildirimler",
+    "AI Danışman"
 ])
 
 with tab1:
@@ -166,6 +168,12 @@ with tab6:
     with st.spinner("Haberler getiriliyor..."):
         news_df, summaries = get_portfolio_news(raw)
 
+    if not news_df.empty:
+        news_df["published"] = (
+            pd.to_datetime(news_df["published"], errors="coerce")
+            .dt.strftime("%d.%m.%Y %H:%M")
+        )
+
     st.markdown("### AI Özetleri")
 
     for item in summaries:
@@ -174,30 +182,23 @@ with tab6:
         if isinstance(summary_text, dict):
             summary_text = summary_text.get("summary", "-")
 
-        st.info(
-            f"""
-**{item.get('symbol', '-') }**
-
-**Özet:** {summary_text}
-
-**Duygu:** {item.get('sentiment', 'Nötr 🟡')}
-
-**Önem:** {item.get('importance', '⭐')}
-
-**Portföy Etkisi:** {item.get('impact', 'Belirgin etki yok.')}
-"""
-        )
+        with st.container(border=True):
+            st.markdown(f"### 🤖 AI Haber Analizi — {item.get('symbol', '-')}")
+            st.markdown(summary_text)
 
     st.markdown("### Haber Listesi")
 
     if news_df.empty:
         st.warning("Haber bulunamadı.")
     else:
-        st.dataframe(news_df, use_container_width=True)
+        st.dataframe(
+            news_df[["source", "symbol", "title", "published", "type"]],
+            use_container_width=True
+        )
 
         for _, row in news_df.head(10).iterrows():
             if row["link"]:
-                st.markdown(f"- [{row['title']}]({row['link']})")
+                st.link_button(f"📰 {row['title']}", row["link"])
 with tab7:
     st.subheader("PDF Rapor Oluştur")
 
@@ -257,3 +258,33 @@ with tab9:
 
         if today_news == 0:
             st.success("Bugün yeni haber yok.")
+with tab10:
+    st.subheader("🤖 AI Portföy Danışmanı")
+
+    risk_score, risk_reasons = calculate_risk_score(valued)
+    alerts = generate_alerts(valued)
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.metric("Risk Skoru", f"{risk_score}/100")
+
+    with c2:
+        if risk_score >= 70:
+            st.error("Risk Seviyesi: Yüksek")
+        elif risk_score >= 40:
+            st.warning("Risk Seviyesi: Orta")
+        else:
+            st.success("Risk Seviyesi: Düşük")
+
+    st.markdown("### 🎯 Risk Nedenleri")
+    for reason in risk_reasons:
+        st.write(f"- {reason}")
+
+    st.markdown("### 🔔 Alarmlar")
+    for alert in alerts:
+        st.write(alert)
+
+    st.markdown("### 🧠 AI Yorumu")
+    comment = ai_portfolio_advisor(valued)
+    st.info(comment)

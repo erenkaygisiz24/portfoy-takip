@@ -1,11 +1,14 @@
+import os
 import datetime as dt
+
 import feedparser
 import pandas as pd
 import requests
+import streamlit as st
 from bs4 import BeautifulSoup
+from google import genai
 
 from database import normalize_symbol
-from openai import OpenAI
 
 
 def analyze_news_ai(items, symbol):
@@ -13,9 +16,9 @@ def analyze_news_ai(items, symbol):
         return {
             "symbol": symbol,
             "summary": f"{symbol} için haber bulunamadı.",
-            "sentiment": "Nötr",
+            "sentiment": "Nötr 🟡",
             "importance": "⭐",
-            "impact": "Veri yok",
+            "impact": "Veri yok.",
         }
 
     text = " ".join([str(x.get("title", "")) for x in items]).lower()
@@ -36,75 +39,87 @@ def analyze_news_ai(items, symbol):
         sentiment = "Nötr 🟡"
 
     importance = "⭐" * max(1, min(5, imp_score + 1))
-
     top_title = items[0].get("title", "")
-
-    summary = (
-        f"{symbol} için {len(items)} haber bulundu. "
-        f"Genel duygu: {sentiment}. "
-        f"Öne çıkan başlık: {top_title}"
-    )
-
-    if neg_score > 0:
-        impact = "Risk sinyali olabilir, detaylı inceleme önerilir."
-    elif pos_score > 0:
-        impact = "Olumlu haber akışı var, portföy etkisi izlenebilir."
-    else:
-        impact = "Belirgin olumlu/olumsuz sinyal yok."
 
     return {
         "symbol": symbol,
-        "summary": summary,
+        "summary": (
+            f"📝 Özet:\n"
+            f"{symbol} için {len(items)} haber/KAP başlığı bulundu. "
+            f"Öne çıkan başlık: {top_title}\n\n"
+            f"😊 Duygu:\n{sentiment}\n\n"
+            f"⭐ Önem:\n{len(importance)}\n\n"
+            f"📈 Portföy Etkisi:\n"
+            f"{'Risk sinyali olabilir.' if neg_score > 0 else 'Belirgin güçlü bir sinyal yok.'}"
+        ),
         "sentiment": sentiment,
         "importance": importance,
-        "impact": impact,
+        "impact": "Anahtar kelime tabanlı fallback analiz.",
     }
-def analyze_news_with_llm(items, symbol):
-    try:
-        client = OpenAI()
 
-        text = "\n".join(
-            [f"- {x.get('title', '')}" for x in items[:10]]
-        )
+
+@st.cache_data(ttl=3600)
+def analyze_news_with_llm_cached(titles_text, symbol):
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    items = [{"title": t.strip("- ").strip()} for t in titles_text.splitlines() if t.strip()]
+    fallback = analyze_news_ai(items, symbol)
+
+    if not api_key:
+        return fallback
+
+    try:
+        client = genai.Client(api_key=api_key)
 
         prompt = f"""
-Aşağıdaki haber başlıklarını {symbol} fonu açısından analiz et.
+Sen profesyonel bir finans haber analistisin.
 
-Başlıklar:
-{text}
+Fon kodu: {symbol}
 
-Çıktı formatı:
-Özet:
-Duygu:
-Önem:
-Portföy Etkisi:
+Haber/KAP başlıkları:
+{titles_text}
+
+Görev:
+Bu haberlerin portföy yatırımcısı açısından ne anlama geldiğini kısa analiz et.
+
+Kurallar:
+- Fonun genel tanımını yapma.
+- Yatırım tavsiyesi verme.
+- En fazla 90 kelime yaz.
+- Sadece haber akışının olası etkisini yorumla.
+- Eğer haber sadece "Fon Detay", "Fon Bilgileri" veya tanıtım sayfası ise yeni gelişme olmadığını belirt.
+- Böyle bir durumda portföy etkisini Düşük yaz.
+
+Şu formatta cevap ver:
+
+📝 Özet:
+...
+
+😊 Duygu:
+Pozitif / Nötr / Negatif
+
+⭐ Önem:
+1-5
+
+📈 Portföy Etkisi:
+Düşük / Orta / Yüksek
 """
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Sen finansal haberleri kısa, net ve yatırımcı odaklı özetleyen bir asistansın."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
+        response = client.models.generate_content(
+            model="gemini-flash-lite-latest",
+            contents=prompt,
         )
-
-        content = response.choices[0].message.content
 
         return {
             "symbol": symbol,
-            "summary": content,
-            "sentiment": "AI Analizi",
+            "summary": response.text.strip(),
+            "sentiment": "Gemini AI",
             "importance": "AI",
-            "impact": "AI tarafından yorumlandı.",
+            "impact": "Gemini tarafından analiz edildi.",
         }
 
-    except Exception:
-        fallback = analyze_news_ai(items, symbol)
-
-        if isinstance(fallback.get("summary"), dict):
-            fallback = fallback["summary"]
-
+    except Exception as e:
+        print("GEMINI ERROR:", repr(e))
         return fallback
 
 
@@ -134,12 +149,35 @@ def google_news_search(symbol, fund_name=None, limit=10):
     return rows
 
 
-def mynet_kap_search(symbol, limit=20):
+def kap_google_search(symbol, limit=10):
+    q = f"{symbol} site:kap.org.tr"
+    url = (
+        "https://news.google.com/rss/search?"
+        f"q={requests.utils.quote(q)}&hl=tr&gl=TR&ceid=TR:tr"
+    )
+
+    feed = feedparser.parse(url)
+
+    rows = []
+    for entry in feed.entries[:limit]:
+        rows.append({
+            "source": "KAP",
+            "symbol": symbol,
+            "title": entry.get("title", ""),
+            "published": entry.get("published", ""),
+            "link": entry.get("link", ""),
+            "type": "KAP",
+        })
+
+    return rows
+
+
+def mynet_kap_search(symbol, limit=10):
     url = "https://finans.mynet.com/borsa/kaphaberleri/"
     rows = []
 
     try:
-        r = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         soup = BeautifulSoup(r.text, "html.parser")
         text_items = soup.find_all(["a", "li", "p", "div"])
 
@@ -171,67 +209,13 @@ def mynet_kap_search(symbol, limit=20):
     return rows
 
 
-def kap_api_search(symbol, limit=20):
-    rows = []
-    url = "https://www.kap.org.tr/tr/api/disclosures"
-
-    payloads = [
-        {"keyword": symbol},
-        {"searchText": symbol},
-        {"fromDate": (dt.date.today() - dt.timedelta(days=30)).isoformat(),
-         "toDate": dt.date.today().isoformat(),
-         "keyword": symbol},
-    ]
-
-    for payload in payloads:
-        try:
-            r = requests.post(
-                url,
-                json=payload,
-                timeout=12,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-
-            if r.status_code != 200:
-                continue
-
-            data = r.json()
-            if isinstance(data, dict):
-                data = data.get("data") or data.get("items") or data.get("disclosures") or []
-
-            for item in data[:limit]:
-                title = (
-                    item.get("title")
-                    or item.get("disclosureType")
-                    or item.get("subject")
-                    or str(item)[:250]
-                )
-
-                rows.append({
-                    "source": "KAP API",
-                    "symbol": symbol,
-                    "title": title,
-                    "published": item.get("publishDate") or item.get("date") or "",
-                    "link": "https://www.kap.org.tr",
-                    "type": "KAP",
-                })
-
-            if rows:
-                break
-
-        except Exception:
-            continue
-
-    return rows
-
-
 def get_symbol_news(symbol, fund_name=None):
     symbol = normalize_symbol(symbol)
 
     rows = []
-
-    # Şimdilik hızlı ve çalışan kaynak
     rows.extend(google_news_search(symbol, fund_name=fund_name, limit=10))
+    rows.extend(kap_google_search(symbol, limit=10))
+    rows.extend(mynet_kap_search(symbol, limit=5))
 
     df = pd.DataFrame(rows)
 
@@ -239,7 +223,15 @@ def get_symbol_news(symbol, fund_name=None):
         return df, analyze_news_ai([], symbol)
 
     df = df.drop_duplicates(subset=["title"]).reset_index(drop=True)
-    analysis = analyze_news_with_llm(df.to_dict("records"), symbol)
+
+    df["published_dt"] = pd.to_datetime(df["published"], errors="coerce")
+    df = df.sort_values("published_dt", ascending=False).drop(columns=["published_dt"])
+
+    titles_text = "\n".join(
+        f"- {title}" for title in df["title"].head(3).tolist()
+    )
+
+    analysis = analyze_news_with_llm_cached(titles_text, symbol)
 
     return df, analysis
 
@@ -262,6 +254,7 @@ def get_portfolio_news(portfolio_df):
 
     if all_rows:
         news_df = pd.concat(all_rows, ignore_index=True)
+        news_df = news_df.drop_duplicates(subset=["title"]).reset_index(drop=True)
     else:
         news_df = pd.DataFrame()
 

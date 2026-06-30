@@ -9,3 +9,4 @@ pytest
 beautifulsoup4
 feedparser
 openai
+google-genai
