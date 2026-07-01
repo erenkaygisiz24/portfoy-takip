@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-
+from technical_analysis import get_asset_history
 from analytics import analytics_from_portfolio
 from database import add_asset, delete_asset, get_cache_table, init_db, portfolio_df
 from news_engine import get_portfolio_news
@@ -170,34 +170,74 @@ with tab3:
 # TAB 4 ANALYSIS
 # =========================
 with tab4:
-    corr, summary, hist = analytics_from_portfolio(raw)
+    st.subheader("📊 Risk / Getiri Analizi")
 
-    if hist.empty:
-        st.info("Tarihsel veri bulunamadı.")
+    hist_data = {}
+
+    for _, row in raw.iterrows():
+        kod = row["kod_adi"]
+        tur = row["tur"]
+
+        series = get_asset_history(kod, tur, days=180)
+
+        if series is not None and not series.empty:
+            hist_data[kod] = series
+
+    if not hist_data:
+        st.warning("Tarihsel veri bulunamadı.")
     else:
+        hist = pd.DataFrame(hist_data).sort_index().ffill().dropna()
+
+        st.markdown("### 📈 Tarihsel Fiyat Grafiği")
         st.line_chart(hist, width="stretch")
 
-    if corr is not None:
-        st.subheader("Korelasyon Matrisi")
-        st.dataframe(corr.style.background_gradient(axis=None), width="stretch")
+        returns = hist.pct_change().dropna()
 
-    if summary is not None:
-        st.subheader("Risk / Getiri Özeti")
-        st.dataframe(
-            summary.style.format({
-                "Yıllık Getiri": "{:+.2%}",
-                "Yıllık Volatilite": "{:.2%}",
-                "Son Fiyat": "{:,.4f}",
-            }),
-            width="stretch",
-        )
+        if returns.empty:
+            st.warning("Getiri hesaplamak için yeterli veri yok.")
+        else:
+            summary_rows = []
 
-        optimal = summary.attrs.get("optimal")
-        if optimal is not None:
-            st.subheader("Sharpe Optimizasyonu")
-            st.dataframe(optimal.style.format({"Optimal Ağırlık": "{:.2%}"}), width="stretch")
+            for col in returns.columns:
+                daily_return = returns[col].mean()
+                daily_vol = returns[col].std()
 
+                annual_return = daily_return * 252
+                annual_vol = daily_vol * (252 ** 0.5)
 
+                sharpe = annual_return / annual_vol if annual_vol != 0 else 0
+
+                summary_rows.append({
+                    "Kod": col,
+                    "Yıllık Getiri": annual_return,
+                    "Yıllık Volatilite": annual_vol,
+                    "Sharpe": sharpe,
+                    "Son Fiyat": hist[col].iloc[-1],
+                })
+
+            summary_df = pd.DataFrame(summary_rows)
+
+            st.markdown("### 📌 Risk / Getiri Özeti")
+            st.dataframe(
+                summary_df.style.format({
+                    "Yıllık Getiri": "{:+.2%}",
+                    "Yıllık Volatilite": "{:.2%}",
+                    "Sharpe": "{:.2f}",
+                    "Son Fiyat": "{:,.4f}",
+                }),
+                width="stretch"
+            )
+
+            if len(returns.columns) >= 2:
+                st.markdown("### 🔗 Korelasyon Matrisi")
+                corr = returns.corr()
+
+                st.dataframe(
+                    corr.style.format("{:.2f}").background_gradient(axis=None),
+                    width="stretch"
+                )
+            else:
+                st.info("Korelasyon için en az 2 varlık gerekiyor.")
 # =========================
 # TAB 5 PRICE SOURCES
 # =========================
