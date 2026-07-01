@@ -213,33 +213,55 @@ with tab5:
 # =========================
 with tab6:
     st.subheader("Haber & KAP Takibi")
-    period = st.radio("Haber periyodu", [7, 30], horizontal=True, format_func=lambda x: f"Son {x} gün")
+
+    period_label = st.radio(
+        "Haber periyodu",
+        ["Son 7 gün", "Son 30 gün", "Tüm zamanlar"],
+        horizontal=True
+    )
+
+    if period_label == "Son 7 gün":
+        period = 7
+    elif period_label == "Son 30 gün":
+        period = 30
+    else:
+        period = 3650
 
     with st.spinner("Haberler getiriliyor..."):
         news_df, summaries = get_portfolio_news(raw, days=period)
 
-    if not news_df.empty:
-        news_df["published"] = pd.to_datetime(news_df["published"], errors="coerce").dt.strftime("%d.%m.%Y %H:%M")
+    if not news_df.empty and "published" in news_df.columns:
+        news_df["published"] = (
+            pd.to_datetime(news_df["published"], errors="coerce")
+            .dt.strftime("%d.%m.%Y %H:%M")
+        )
 
     st.markdown("### AI Özetleri")
+
     for item in summaries:
         summary_text = item.get("summary", "-")
+
         if isinstance(summary_text, dict):
             summary_text = summary_text.get("summary", "-")
+
         with st.container(border=True):
             st.markdown(f"### 🤖 AI Haber Analizi — {item.get('symbol', '-')}")
             st.markdown(summary_text)
 
     st.markdown("### Haber Listesi")
+
     if news_df.empty:
         st.warning("Haber bulunamadı.")
     else:
         visible_cols = ["source", "symbol", "title", "published", "type"]
-        st.dataframe(news_df[[c for c in visible_cols if c in news_df.columns]], width="stretch")
+        st.dataframe(
+            news_df[[c for c in visible_cols if c in news_df.columns]],
+            width="stretch"
+        )
+
         for _, row in news_df.head(10).iterrows():
             if row.get("link"):
                 st.link_button(f"📰 {row['title']}", row["link"])
-
 
 # =========================
 # TAB 7 PDF
