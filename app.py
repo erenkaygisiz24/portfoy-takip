@@ -170,7 +170,7 @@ with tab3:
 # TAB 4 ANALYSIS
 # =========================
 with tab4:
-    st.subheader("📊 Risk / Getiri Analizi")
+    st.subheader("📊 Gelişmiş Risk / Getiri Analizi")
 
     hist_data = {}
 
@@ -185,18 +185,19 @@ with tab4:
 
     if not hist_data:
         st.warning("Tarihsel veri bulunamadı.")
+
     else:
         hist = pd.DataFrame(hist_data).sort_index().ffill().dropna()
-
-        st.markdown("### 📈 Tarihsel Fiyat Grafiği")
-        st.line_chart(hist, width="stretch")
 
         returns = hist.pct_change().dropna()
 
         if returns.empty:
             st.warning("Getiri hesaplamak için yeterli veri yok.")
+
         else:
-            summary_rows = []
+            summary_rows = {}
+            drawdown_df = pd.DataFrame(index=returns.index)
+            rolling_vol_df = pd.DataFrame(index=returns.index)
 
             for col in returns.columns:
                 first_price = hist[col].iloc[0]
@@ -209,18 +210,29 @@ with tab4:
 
                 cagr = (last_price / first_price) ** (1 / years) - 1 if years > 0 else 0
 
-                daily_return = returns[col].mean()
-                daily_vol = returns[col].std()
-
-                annual_return = daily_return * 252
-                annual_vol = daily_vol * (252 ** 0.5)
+                annual_return = returns[col].mean() * 252
+                annual_vol = returns[col].std() * (252 ** 0.5)
 
                 sharpe = annual_return / annual_vol if annual_vol != 0 else 0
+
+                negative_returns = returns[col][returns[col] < 0]
+                downside_vol = negative_returns.std() * (252 ** 0.5)
+
+                sortino = annual_return / downside_vol if downside_vol and downside_vol != 0 else 0
 
                 cumulative = (1 + returns[col]).cumprod()
                 running_max = cumulative.cummax()
                 drawdown = (cumulative / running_max) - 1
                 max_drawdown = drawdown.min()
+
+                calmar = cagr / abs(max_drawdown) if max_drawdown != 0 else 0
+
+                var_95 = returns[col].quantile(0.05)
+
+                rolling_vol = returns[col].rolling(30).std() * (252 ** 0.5)
+
+                drawdown_df[col] = drawdown
+                rolling_vol_df[col] = rolling_vol
 
                 if annual_vol >= 0.30 or max_drawdown <= -0.20:
                     risk_level = "🔴 Yüksek"
@@ -229,21 +241,44 @@ with tab4:
                 else:
                     risk_level = "🟢 Düşük"
 
-                summary_rows.append({
+                summary_rows[col] = {
                     "Kod": col,
                     "Toplam Getiri": total_return,
                     "CAGR": cagr,
                     "Yıllık Getiri": annual_return,
                     "Yıllık Volatilite": annual_vol,
                     "Sharpe": sharpe,
+                    "Sortino": sortino,
+                    "Calmar": calmar,
                     "Max Drawdown": max_drawdown,
+                    "VaR 95": var_95,
                     "Risk Seviyesi": risk_level,
                     "Son Fiyat": last_price,
-                })
+                }
 
-            summary_df = pd.DataFrame(summary_rows)
+            summary_df = pd.DataFrame(summary_rows.values())
 
-            st.markdown("### 📌 Risk / Getiri Özeti")
+            main = summary_df.iloc[0]
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            c1.metric("CAGR", f"{main['CAGR']:+.2%}")
+            c2.metric("Sharpe", f"{main['Sharpe']:.2f}")
+            c3.metric("Max Drawdown", f"{main['Max Drawdown']:.2%}")
+            c4.metric("Risk Seviyesi", main["Risk Seviyesi"])
+
+            c5, c6, c7, c8 = st.columns(4)
+
+            c5.metric("Toplam Getiri", f"{main['Toplam Getiri']:+.2%}")
+            c6.metric("Volatilite", f"{main['Yıllık Volatilite']:.2%}")
+            c7.metric("Sortino", f"{main['Sortino']:.2f}")
+            c8.metric("VaR 95", f"{main['VaR 95']:.2%}")
+
+            st.markdown("### 📈 Tarihsel Fiyat Grafiği")
+            st.line_chart(hist, width="stretch")
+
+            st.markdown("### 📌 Risk / Getiri Tablosu")
+
             st.dataframe(
                 summary_df.style.format({
                     "Toplam Getiri": "{:+.2%}",
@@ -251,39 +286,56 @@ with tab4:
                     "Yıllık Getiri": "{:+.2%}",
                     "Yıllık Volatilite": "{:.2%}",
                     "Sharpe": "{:.2f}",
+                    "Sortino": "{:.2f}",
+                    "Calmar": "{:.2f}",
                     "Max Drawdown": "{:.2%}",
+                    "VaR 95": "{:.2%}",
                     "Son Fiyat": "{:,.4f}",
                 }),
                 width="stretch"
             )
 
             st.markdown("### 📉 Drawdown Grafiği")
-
-            drawdown_df = pd.DataFrame(index=returns.index)
-
-            for col in returns.columns:
-                cumulative = (1 + returns[col]).cumprod()
-                running_max = cumulative.cummax()
-                drawdown_df[col] = (cumulative / running_max) - 1
-
             st.line_chart(drawdown_df, width="stretch")
+
+            st.markdown("### 🌊 30 Günlük Hareketli Volatilite")
+            st.line_chart(rolling_vol_df, width="stretch")
 
             st.markdown("### 🤖 Risk Yorumu")
 
-            first = summary_df.iloc[0]
+            if main["Sharpe"] >= 1:
+                sharpe_comment = "Sharpe oranı 1'in üzerinde olduğu için risk/getiri dengesi olumlu görünüyor."
+            else:
+                sharpe_comment = "Sharpe oranı 1'in altında olduğu için risk/getiri dengesi sınırlı görünüyor."
+
+            if main["Max Drawdown"] <= -0.20:
+                dd_comment = "Maksimum düşüş yüksek seviyede; portföy dalgalanmalara karşı hassas."
+            elif main["Max Drawdown"] <= -0.10:
+                dd_comment = "Maksimum düşüş orta seviyede; risk takip edilmeli."
+            else:
+                dd_comment = "Maksimum düşüş kontrollü seviyede."
 
             risk_comment = f"""
-**{first['Kod']}** için son 180 günlük analiz:
+**{main['Kod']} Risk Analizi**
 
-- Toplam getiri: **{first['Toplam Getiri']:+.2%}**
-- CAGR: **{first['CAGR']:+.2%}**
-- Yıllık volatilite: **{first['Yıllık Volatilite']:.2%}**
-- Sharpe oranı: **{first['Sharpe']:.2f}**
-- Maksimum düşüş: **{first['Max Drawdown']:.2%}**
-- Risk seviyesi: **{first['Risk Seviyesi']}**
+**Güçlü Yönler**
+- Toplam getiri: **{main['Toplam Getiri']:+.2%}**
+- CAGR: **{main['CAGR']:+.2%}**
+- Sharpe: **{main['Sharpe']:.2f}**
+- Sortino: **{main['Sortino']:.2f}**
 
-Genel yorum: Sharpe oranı 1'in üzerindeyse risk/getiri dengesi olumlu kabul edilebilir. 
-Max drawdown değeri, yatırımın seçilen dönemde yaşadığı en sert geri çekilmeyi gösterir.
+**Riskler**
+- Yıllık volatilite: **{main['Yıllık Volatilite']:.2%}**
+- Max drawdown: **{main['Max Drawdown']:.2%}**
+- VaR 95: **{main['VaR 95']:.2%}**
+- Risk seviyesi: **{main['Risk Seviyesi']}**
+
+**Yorum**
+{sharpe_comment}
+
+{dd_comment}
+
+Bu analiz geçmiş veriye dayanır; yatırım tavsiyesi değildir.
 """
 
             st.info(risk_comment)
