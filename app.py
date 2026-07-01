@@ -199,6 +199,16 @@ with tab4:
             summary_rows = []
 
             for col in returns.columns:
+                first_price = hist[col].iloc[0]
+                last_price = hist[col].iloc[-1]
+
+                total_return = (last_price / first_price) - 1
+
+                days_count = max((hist.index[-1] - hist.index[0]).days, 1)
+                years = days_count / 365
+
+                cagr = (last_price / first_price) ** (1 / years) - 1 if years > 0 else 0
+
                 daily_return = returns[col].mean()
                 daily_vol = returns[col].std()
 
@@ -207,12 +217,28 @@ with tab4:
 
                 sharpe = annual_return / annual_vol if annual_vol != 0 else 0
 
+                cumulative = (1 + returns[col]).cumprod()
+                running_max = cumulative.cummax()
+                drawdown = (cumulative / running_max) - 1
+                max_drawdown = drawdown.min()
+
+                if annual_vol >= 0.30 or max_drawdown <= -0.20:
+                    risk_level = "🔴 Yüksek"
+                elif annual_vol >= 0.15 or max_drawdown <= -0.10:
+                    risk_level = "🟡 Orta"
+                else:
+                    risk_level = "🟢 Düşük"
+
                 summary_rows.append({
                     "Kod": col,
+                    "Toplam Getiri": total_return,
+                    "CAGR": cagr,
                     "Yıllık Getiri": annual_return,
                     "Yıllık Volatilite": annual_vol,
                     "Sharpe": sharpe,
-                    "Son Fiyat": hist[col].iloc[-1],
+                    "Max Drawdown": max_drawdown,
+                    "Risk Seviyesi": risk_level,
+                    "Son Fiyat": last_price,
                 })
 
             summary_df = pd.DataFrame(summary_rows)
@@ -220,13 +246,47 @@ with tab4:
             st.markdown("### 📌 Risk / Getiri Özeti")
             st.dataframe(
                 summary_df.style.format({
+                    "Toplam Getiri": "{:+.2%}",
+                    "CAGR": "{:+.2%}",
                     "Yıllık Getiri": "{:+.2%}",
                     "Yıllık Volatilite": "{:.2%}",
                     "Sharpe": "{:.2f}",
+                    "Max Drawdown": "{:.2%}",
                     "Son Fiyat": "{:,.4f}",
                 }),
                 width="stretch"
             )
+
+            st.markdown("### 📉 Drawdown Grafiği")
+
+            drawdown_df = pd.DataFrame(index=returns.index)
+
+            for col in returns.columns:
+                cumulative = (1 + returns[col]).cumprod()
+                running_max = cumulative.cummax()
+                drawdown_df[col] = (cumulative / running_max) - 1
+
+            st.line_chart(drawdown_df, width="stretch")
+
+            st.markdown("### 🤖 Risk Yorumu")
+
+            first = summary_df.iloc[0]
+
+            risk_comment = f"""
+**{first['Kod']}** için son 180 günlük analiz:
+
+- Toplam getiri: **{first['Toplam Getiri']:+.2%}**
+- CAGR: **{first['CAGR']:+.2%}**
+- Yıllık volatilite: **{first['Yıllık Volatilite']:.2%}**
+- Sharpe oranı: **{first['Sharpe']:.2f}**
+- Maksimum düşüş: **{first['Max Drawdown']:.2%}**
+- Risk seviyesi: **{first['Risk Seviyesi']}**
+
+Genel yorum: Sharpe oranı 1'in üzerindeyse risk/getiri dengesi olumlu kabul edilebilir. 
+Max drawdown değeri, yatırımın seçilen dönemde yaşadığı en sert geri çekilmeyi gösterir.
+"""
+
+            st.info(risk_comment)
 
             if len(returns.columns) >= 2:
                 st.markdown("### 🔗 Korelasyon Matrisi")
